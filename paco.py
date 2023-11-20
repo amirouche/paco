@@ -58,6 +58,7 @@ def cx_sequence(*readers):
             return CX(False, None, None)
 
         op = ops[0]
+        print("SEQHEAD", cx.head)
         head = op(cx)
         if not head.ok:
             return CX(False, head.head, head.tail)
@@ -136,10 +137,10 @@ def cx_zero_or_more(reader):
 
     def aux(cx):
         if cx is None:
-            return CX(False, None, None)
+            return CX(None, None, None)
 
         if cx.head is None:
-            return CX(False, cx.head, cx.tail)
+            return CX(True, None, None)
 
         head = reader(cx)
         if not head.ok:
@@ -153,6 +154,8 @@ def cx_zero_or_more(reader):
             if cx.ok:
                 out.append(cx.head)
                 cx = cx.tail
+            elif not out:
+                return CX(False, None, None)
             else:
                 return CX(True, out, CX(None, cx.head, cx.tail))
 
@@ -251,13 +254,12 @@ liltag = cx_apply(
 )
 
 
-def _test_liltag_to_pyhtml(cx):
-    if cx is None:
-        return []
-    return [cx.head, *_test_liltag_to_pyhtml(cx.tail)]
-
-
 def test_liltag():
+    def _test_liltag_to_pyhtml(cx):
+        if cx is None:
+            return []
+        return [cx.head, *_test_liltag_to_pyhtml(cx.tail)]
+
     op = cx_sequence(
         liltag,
         cx_apply(
@@ -289,11 +291,62 @@ def test_lilmark():
         out.append(string)
         return out
 
-    out = lilmark(cx_from_string("hello #people welcome to the `world`!"))
+    out = lilmark(
+        cx_from_string("hello #people welcome to the `world` of parser combinators!")
+    )
+
     assert normalize(out.head) == [
         "hello ",
         ["tag", "people"],
         " welcome to the ",
         ["code", "world"],
-        "!",
+        " of parser combinators!",
     ]
+
+
+def test_http_json_response():
+    input = dict(
+        ok=True,
+        message="parsing is successful",
+        data="XXX",  # dict(id=42, name="paco", type="cat")
+    )
+
+    def cxi(x):
+        if isinstance(x, dict):
+            cx = CX(None, None, None)
+            for key, value in sorted(x.items(), key=lambda x: x[0]):
+                cx = CX(None, CX(None, key, cxi(value)), cx)
+            return CX(None, dict, cx)
+        elif isinstance(x, list):
+            cx = CX(None, None, None)
+            for item in reversed(x):
+                cx = CX(None, cxi(item), cx)
+            return CX(None, list, cx)
+        else:
+            return CX(None, x, None)
+
+    cx_dict = cx_apply(lambda x: x.tail, cx_when(lambda x: x is dict))
+
+    given = cxi(input)
+    given = cx_dict(given)
+
+    print("GIVEN", given)
+    cx_field = cx_any(
+        cx_apply(
+            lambda x: CX(True, x.tail, None),
+            cx_when(lambda x: x.head == "ok"),
+        ),
+        cx_apply(
+            lambda x: CX(True, x.tail, None),
+            cx_when(lambda x: x.head == "message"),
+        ),
+        cx_apply(
+            lambda x: CX(True, x.tail, None),
+            cx_when(lambda x: x.head == "data"),
+        ),
+        cx_when(lambda x: x.head is None),
+    )
+
+    cx = cx_sequence(cx_field, cx_field, cx_field)
+    given = cx(given)
+    assert given == []
